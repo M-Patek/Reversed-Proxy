@@ -10,8 +10,9 @@ services:
     environment:
       - REDIS_PASSWORD=my_secure_redis_password
       - TZ=Asia/Shanghai
-      # [新增] 网关安全密钥，防止被盗用
-      - GATEWAY_SECRET=sk-my-super-secret-token-meow
+      - GATEWAY_SECRET=sk-meow-meow-secret
+      # [新增] 自动补货 Webhook (当账号被封时触发)
+      - AUTO_REPLACEMENT_WEBHOOK=https://my-admin-panel.com/api/replace_key
     volumes:
       - ./config.json:/app/config.json
     depends_on:
@@ -34,8 +35,6 @@ services:
       - TZ=Asia/Shanghai
     volumes:
       - redis_data:/data
-    expose:
-      - 6379
     networks:
       - backend-network
 
@@ -46,9 +45,6 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
     ports:
       - "9090:9090"
     networks:
@@ -62,8 +58,6 @@ services:
       - grafana_data:/var/lib/grafana
     ports:
       - "3000:3000"
-    depends_on:
-      - prometheus
     networks:
       - default
 
