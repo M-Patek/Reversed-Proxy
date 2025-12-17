@@ -11,12 +11,12 @@ Database & Metrics
 redis>=5.0.1
 prometheus-fastapi-instrumentator>=7.0.0
 
-HTTP Clients (Dual Support)
+HTTP Clients
 
-Cloud: Anti-fingerprint requests (Docker/Linux)
+Cloud Engine
 
 curl_cffi>=0.6.2
 
-Local: Windows compatible requests
+Local Engine
 
 aiohttp>=3.9.0
