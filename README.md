@@ -1,79 +1,168 @@
-Reversed-Proxy (Gemini Tactical Gateway)
+🛡️ Gemini Tactical Gateway (Reversed-Proxy)
 
-高并发、具备指纹混淆与战术调度的 Gemini 反向代理服务。
+High-Performance, Fingerprint-Obfuscated Reverse Proxy for Google Gemini API
 
-🛡️ Security Checklist (安全必读)
+Now supporting official Google Gemini API (v1beta) with dual-engine architecture.
 
-在部署到生产环境前，必须完成以下安全配置检查：
+Gemini Tactical Gateway 是一个专为 Google Gemini API 设计的高级反向代理网关。它不仅支持多账号（Slot）负载均衡和并发控制，还独创了双引擎架构，同时满足云端生产环境的高隐蔽性需求和本地开发环境的兼容性需求。
 
-[CRITICAL] 修改默认密码
+✨ 核心特性 (Key Features)
 
-Redis 密码: 不要使用默认密码，请在 .env 文件中设置强密码。
+🚀 双引擎架构 (Dual-Engine)
 
-Gateway Secret: 设置复杂的 GATEWAY_SECRET，防止未授权访问。
+Cloud Engine (Docker/Linux): 基于 curl_cffi，支持 TLS/JA3 指纹模拟（Chrome/Safari/Edge），有效对抗云端风控。
 
-[CRITICAL] 环境隔离
+Local Engine (Windows/Mac): 基于 aiohttp，彻底解决 Windows 下 C 扩展编译难题，提供流畅的本地调试体验。
 
-创建 .env 文件并将其添加到 .gitignore（已包含在模板中）。
+🧠 智能战术调度 (Tactical Scheduling)
 
-严禁将包含真实 Key 的 config.json 或 .env 提交到 Git 仓库。
+多 Slot 轮询: 支持配置多个 API Key/Proxy 组合，基于权重的概率调度算法。
 
-现在推荐在 config.json 中使用 ${ENV_VAR} 占位符，将 Key 存储在环境变量中。
+自动熔断与恢复: 自动检测 429 (Rate Limit) 和 403 (Ban)，智能降低故障节点权重或触发 Webhook 报警。
 
-[HIGH] 攻击面收敛
+原子级并发控制: 使用 Redis + Lua 脚本实现严格的并发限制，防止超额调用。
 
-确保 prometheus (9090) 和 grafana (3000) 端口仅绑定到 127.0.0.1 或通过 VPN/Auth Proxy 访问，不要直接暴露在公网。
+🔒 安全与合规
 
-[HIGH] 资源限制
+官方 API 对接: 全面对接 Google 官方 generativelanguage.googleapis.com 接口。
 
-检查 docker-compose.yaml 中的资源限制 (CPU/Memory)，确保单容器故障不会拖垮宿主机。
+隐私保护: 敏感信息（API Keys, Secrets）通过环境变量注入，杜绝硬编码。
 
-🚀 快速开始
+DoS 防御: 内置流式响应缓冲区限制 (1MB)，防止恶意大包攻击。
 
-1. 配置环境变量
+🛠️ 快速开始 (Quick Start)
 
-复制示例文件并修改：
+方式一：Docker 部署 (生产环境推荐)
+
+适用于服务器部署，自动启用抗指纹模式。
+
+克隆仓库:
+
+git clone [https://github.com/your-repo/gemini-tactical-gateway.git](https://github.com/your-repo/gemini-tactical-gateway.git)
+cd gemini-tactical-gateway
+
+
+配置环境变量:
 
 cp .env.example .env
-nano .env
+# 编辑 .env 文件，设置 REDIS_PASSWORD 和 GATEWAY_SECRET
+vim .env
 
 
-.env 文件内容参考：
-
-REDIS_PASSWORD=your_strong_password_here
-GATEWAY_SECRET=sk-your_gateway_secret_here
-# 在此处定义 config.json 中需要引用的变量
-GEMINI_API_KEY_LAX=AIzaSyDxxxx_Key_LAX
-PROXY_URL_LAX=[http://user:pass@lax-proxy.net:8000](http://user:pass@lax-proxy.net:8000)
-
-
-2. 配置代理池 (Slots)
-
-修改 config.json，支持使用 ${VAR_NAME} 引用环境变量：
+配置代理池 (config.json):
+修改 config.json，支持使用 ${ENV_VAR} 引用环境变量：
 
 [
   {
-    "key": "${GEMINI_API_KEY_LAX}",
-    "proxy": "${PROXY_URL_LAX}",
+    "comment": "Slot 1: US-LAX",
+    "key": "${GEMINI_API_KEY_1}",
+    "proxy": "[http://user:pass@proxy-us.com:7890](http://user:pass@proxy-us.com:7890)",
     "impersonate": "chrome110",
-    "headers": { "X-Timezone": "America/Los_Angeles" }
+    "max_concurrency": 5
   }
 ]
 
 
-3. 启动服务
+启动服务:
 
 docker-compose up -d --build
 
 
-🛠️ 功能特性
+方式二：本地开发 (Windows/Mac)
 
-指纹混淆 (JA3/HTTP2): 动态模拟 Chrome/Safari/Edge 指纹。
+适用于本地调试，使用 aiohttp 引擎，无需编译复杂依赖。
 
-智能调度: 基于权重的概率调度算法，自动熔断 429/403 节点。
+安装依赖:
 
-并发控制: 使用 Lua 脚本实现的原子级精确并发限制。
+# Windows 用户无需安装 curl_cffi
+pip install aiohttp redis fastapi uvicorn python-dotenv prometheus-fastapi-instrumentator
 
-抗 DoS: 1MB 流式响应缓冲区限制。
 
-安全加固: 环境变量注入、Secrets 时序攻击防御、非 Root 容器运行。
+启动本地 Redis:
+确保本地运行了 Redis (默认端口 6379)。
+
+运行本地版网关:
+
+# 注意：运行的是 main_local.py
+uvicorn app.main_local:app --reload --port 8000
+
+
+📡 API 调用示例
+
+网关启动后，您可以像调用 OpenAI/Gemini 官方接口一样使用它。
+
+Endpoint: POST /v1/chat/completions
+
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer <YOUR_GATEWAY_SECRET>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contents": [{
+      "parts": [{"text": "Hello, who are you?"}]
+    }]
+  }'
+
+
+⚙️ 配置说明
+
+环境变量 (.env)
+
+变量名
+
+说明
+
+示例
+
+GATEWAY_SECRET
+
+网关访问密钥，防止未授权访问
+
+sk-your-secret-key
+
+REDIS_PASSWORD
+
+Redis 数据库密码
+
+secure-redis-pass
+
+AUTO_REPLACEMENT_WEBHOOK
+
+(可选) 节点被封禁时的报警 Webhook
+
+https://api.bot.com/alert
+
+代理池配置 (config.json)
+
+配置文件为一个 JSON 数组，每个对象代表一个可用资源槽位 (Slot)：
+
+key: Google Gemini API Key (推荐使用 ${VAR} 引用环境变量)。
+
+proxy: 该 Slot 绑定的 HTTP/HTTPS 代理地址。
+
+impersonate: (仅 Docker 模式生效) 模拟的浏览器指纹，如 chrome110, safari15_5。
+
+max_concurrency: 该 Key 允许的最大并发数。
+
+📊 监控 (Monitoring)
+
+项目自带 Prometheus + Grafana 集成 (Docker Compose 默认启动)。
+
+Prometheus: http://127.0.0.1:9090
+
+Grafana: http://127.0.0.1:3000 (默认账户 admin/admin)
+
+⚠️ 安全检查清单 (Security Checklist)
+
+在公网部署前，请务必检查：
+
+[ ] 修改了默认的 Redis 密码。
+
+[ ] 设置了高强度的 GATEWAY_SECRET。
+
+[ ] 确保 Prometheus/Grafana 端口 (9090/3000) 仅监听 127.0.0.1 或已配置防火墙。
+
+[ ] 不要将包含真实 Key 的 config.json 提交到 GitHub。
+
+📝 License
+
+MIT License
