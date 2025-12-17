@@ -190,22 +190,7 @@ slot_manager = SlotManager()
 
 # --- 2. 仿真与熵增逻辑 ---
 
-async def simulate_human_typing(prompt_text: str):
-    """
-    模拟人类键入节奏 (Behavioral Fingerprinting)
-    根据 prompt 长度计算“思考+打字”时间，并引入随机抖动
-    """
-    if not prompt_text: return
-    length = len(prompt_text)
-    # 假设平均打字速度 + 思考停顿
-    # 极短文本也要有基础延迟，防止被识别为机器瞬间请求
-    base_delay = min(3.0, length * 0.02) 
-    jitter = random.uniform(0.1, 0.5)
-    total_delay = base_delay + jitter
-    
-    # 只有当 delay 比较大时才真的 sleep，避免影响太久
-    if total_delay > 0.5:
-        await asyncio.sleep(total_delay)
+# [已移除] simulate_human_typing 函数以提高效率
 
 def get_ja3_perturbed_impersonate(base_impersonate: str) -> str:
     """
@@ -319,9 +304,8 @@ async def tactical_proxy(request: Request):
 
     redis = await get_redis()
     
-    # 1. 行为仿真：人类键入延迟
-    # 在获取 Slot 之前就进行延迟，模拟用户思考时间
-    await simulate_human_typing(prompt)
+    # [已移除] 行为仿真：人类键入延迟
+    # await simulate_human_typing(prompt)
 
     # 2. 智能调度获取资源
     slot_idx = await slot_manager.get_best_slot(redis)
