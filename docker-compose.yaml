@@ -12,9 +12,11 @@ services:
     environment:
       # ⚠️ 注意：这里必须和 app/main.py 中的 REDIS_PASSWORD 变量匹配
       - REDIS_PASSWORD=my_secure_redis_password
-      # 添加 GEMINI_API_KEY 环境变量用于上游认证
-      - GEMINI_API_KEY=YOUR_CAPTURED_API_KEY_OR_LEAVE_BLANK
+      # GEMINI_API_KEY 已不再必须，因为我们使用 config.json
       - TZ=Asia/Shanghai
+    volumes:
+      # [新增] 挂载配置文件，方便热更新资源池
+      - ./config.json:/app/config.json
     depends_on:
       - redis
       - prometheus
