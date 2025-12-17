@@ -8,11 +8,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - REDIS_PASSWORD=my_secure_redis_password
+      # [Task 3.1] 移除硬编码凭据，改为环境变量插值
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
       - TZ=Asia/Shanghai
-      - GATEWAY_SECRET=sk-meow-meow-secret
-      # [新增] 自动补货 Webhook (当账号被封时触发)
-      - AUTO_REPLACEMENT_WEBHOOK=https://my-admin-panel.com/api/replace_key
+      - GATEWAY_SECRET=${GATEWAY_SECRET}
+      - AUTO_REPLACEMENT_WEBHOOK=${AUTO_REPLACEMENT_WEBHOOK}
     volumes:
       - ./config.json:/app/config.json
     depends_on:
@@ -25,18 +25,34 @@ services:
       nofile:
         soft: 65535
         hard: 65535
+    # [Task 3.2] 添加资源限制，防止单点故障耗尽宿主机资源
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          memory: 128M
 
   redis:
     image: redis:7.0-alpine
     container_name: gemini-proxy-redis
     restart: always
-    command: redis-server --appendonly yes --requirepass my_secure_redis_password
+    # [Task 3.1] 使用环境变量注入密码，避免直接硬编码在 yaml 中
+    # 注意：在生产环境中，为了彻底防止 ps 命令泄露，建议挂载 redis.conf 配置文件
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     environment:
       - TZ=Asia/Shanghai
     volumes:
       - redis_data:/data
     networks:
       - backend-network
+    # [Task 3.2] Redis 通常占用较低，给予适当限制即可
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
 
   prometheus:
     image: prom/prometheus:latest
@@ -46,7 +62,8 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
     ports:
-      - "9090:9090"
+      # [Task 3.3] 收敛攻击面：仅绑定到 127.0.0.1，禁止公网直接访问
+      - "127.0.0.1:9090:9090"
     networks:
       - default
 
@@ -57,7 +74,8 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
     ports:
-      - "3000:3000"
+      # [Task 3.3] 收敛攻击面：仅绑定到 127.0.0.1
+      - "127.0.0.1:3000:3000"
     networks:
       - default
 
