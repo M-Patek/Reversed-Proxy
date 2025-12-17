@@ -8,7 +8,7 @@ import signal
 import time
 import hashlib
 import aiohttp
-import secrets  # [Task 2.3] 引入 secrets 模块用于安全比较
+import secrets
 from typing import AsyncGenerator, Optional, Dict, List
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -81,12 +81,17 @@ class SlotManager:
         [Task 2.4] 增强配置健壮性
         1. 捕获 JSONDecodeError，防止配置格式错误导致崩溃
         2. 采用 '全部加载成功才替换' 的策略，避免运行在空配置下
+        [Task 4.1] 支持环境变量占位符解析
         """
         try:
             if os.path.exists(CONFIG_PATH):
                 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                    # [Task 4.1] 读取原始内容并替换环境变量占位符 (如 ${API_KEY})
+                    raw_content = f.read()
+                    expanded_content = os.path.expandvars(raw_content)
+                    
                     # 先加载到临时变量，确保 JSON 格式无误
-                    new_slots = json.load(f)
+                    new_slots = json.loads(expanded_content)
                 
                 if not isinstance(new_slots, list):
                     raise ValueError("Config must be a list of slots")
@@ -97,8 +102,8 @@ class SlotManager:
                 now = time.time()
                 for idx, slot in enumerate(self.slots):
                     # 简单校验必要字段
-                    if 'key' not in slot: 
-                        logger.warning(f"[Config] Slot {idx} missing 'key', skipping init state.")
+                    if 'key' not in slot or not slot['key'] or slot['key'].startswith("$"): 
+                        logger.warning(f"[Config] Slot {idx} missing 'key' or env var not set, skipping init state.")
                         continue
                         
                     key_hash = hashlib.md5(slot['key'].encode()).hexdigest()
