@@ -1,20 +1,16 @@
 [
   {
-    "comment": "Slot 1: 美国西部 ISP - Chrome 模拟 (示例)",
-    "key": "AIzaSyDxxxx_Your_Actual_Key_1",
-    "proxy": "http://user1:pass1@isp.proxy.net:8000",
-    "impersonate": "chrome110"
+    "comment": "Slot 1: Premium ISP - High Capacity",
+    "key": "AIzaSyDxxxx_Key_1",
+    "proxy": "http://user:pass@1.2.3.4:8000",
+    "impersonate": "chrome110",
+    "max_concurrency": 10
   },
   {
-    "comment": "Slot 2: 日本东京 ISP - Safari 模拟 (示例)",
-    "key": "AIzaSyDxxxx_Your_Actual_Key_2",
-    "proxy": "http://user2:pass2@isp.proxy.net:8000",
-    "impersonate": "safari15_5"
-  },
-  {
-    "comment": "Slot 3: 备用线路 - Edge 模拟 (无代理，容易风控，仅作测试)",
-    "key": "AIzaSyDxxxx_Your_Actual_Key_3",
-    "proxy": null,
-    "impersonate": "edge101"
+    "comment": "Slot 2: Standard ISP",
+    "key": "AIzaSyDxxxx_Key_2",
+    "proxy": "http://user:pass@5.6.7.8:8000",
+    "impersonate": "safari15_5",
+    "max_concurrency": 3
   }
 ]
