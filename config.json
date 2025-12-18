@@ -1,24 +1,23 @@
 [
   {
-    "comment": "Slot 1: 美国洛杉矶 (US-LAX) - 敏感信息已通过环境变量注入",
-    "key": "${GEMINI_API_KEY_LAX}",
-    "proxy": "${PROXY_URL_LAX}",
+    "comment": "Slot 1: 美国节点 - 高并发",
+    "key": "AIzaSy...your_gemini_key_1",
+    "proxy": "http://user:pass@us-proxy:7890",
     "impersonate": "chrome110",
-    "max_concurrency": 8,
-    "headers": {
-      "Accept-Language": "en-US,en;q=0.9",
-      "X-Timezone": "America/Los_Angeles" 
-    }
+    "max_concurrency": 8
   },
   {
-    "comment": "Slot 2: 日本东京 (JP-TYO) - 敏感信息已通过环境变量注入",
-    "key": "${GEMINI_API_KEY_TYO}",
-    "proxy": "${PROXY_URL_TYO}",
+    "comment": "Slot 2: 日本节点 - 稳定备份",
+    "key": "AIzaSy...your_gemini_key_2",
+    "proxy": "http://user:pass@jp-proxy:7890",
     "impersonate": "safari15_5",
-    "max_concurrency": 5,
-    "headers": {
-      "Accept-Language": "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7",
-      "X-Timezone": "Asia/Tokyo"
-    }
+    "max_concurrency": 5
+  },
+  {
+    "comment": "Slot 3: 备用低频率节点",
+    "key": "AIzaSy...your_gemini_key_3",
+    "proxy": null,
+    "impersonate": "edge101",
+    "max_concurrency": 2
   }
 ]
