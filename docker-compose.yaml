@@ -1,91 +1,61 @@
 version: '3.8'
 
+# -------------------------------------------------------------------
+# 🌩️ S.W.A.R.M. Gateway - Cloud Production Compose
+# 专为东京节点设计：无状态、自动重启、环境注入
+# -------------------------------------------------------------------
+
 services:
-  gemini-proxy:
+  gateway:
+    # 构建上下文：当前目录
     build: .
-    container_name: gemini-proxy-service
+    
+    container_name: swarm_gateway_prod
+    
+    # 【核心策略】永远自动重启
+    # 无论是程序崩溃还是服务器重启，Docker 都会尽力把服务拉起来
     restart: always
+    
+    # 端口映射
+    # 8000 是服务端口
     ports:
       - "8000:8000"
+    
+    # 环境变量注入
+    # 生产环境直接读取宿主机的 .env 文件
+    # 包含：GEMINI_API_KEYS, GATEWAY_SECRET 等
+    env_file:
+      - .env
+    
     environment:
-      # [Task 3.1] 移除硬编码凭据，改为环境变量插值
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - TZ=Asia/Shanghai
-      - GATEWAY_SECRET=${GATEWAY_SECRET}
-      - AUTO_REPLACEMENT_WEBHOOK=${AUTO_REPLACEMENT_WEBHOOK}
-    volumes:
-      - ./config.json:/app/config.json
-    depends_on:
-      - redis
-      - prometheus
-    networks:
-      - backend-network
-      - default
-    ulimits:
-      nofile:
-        soft: 65535
-        hard: 65535
-    # [Task 3.2] 添加资源限制，防止单点故障耗尽宿主机资源
+      # 显式覆盖一些生产环境特有的变量
+      - LOG_LEVEL=INFO
+      - ENVIRONMENT=production
+    
+    # 健康检查
+    # 每 30 秒检查一次 /health 接口
+    # 如果连续 3 次失败，Docker 会标记容器为 unhealthy (配合编排工具可自动重启)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # 资源限制 (防止内存泄漏导致服务器死机)
+    # 根据你的 VPS 配置适当调整，这里按 2GB 内存 VPS 的标准配置
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 512M
+          cpus: '1.5'        # 限制使用 1.5 个核
+          memory: 1024M      # 限制最大使用 1GB 内存
         reservations:
-          memory: 128M
+          memory: 256M       # 保证至少有 256MB 可用
 
-  redis:
-    image: redis:7.0-alpine
-    container_name: gemini-proxy-redis
-    restart: always
-    # [Task 3.1] 使用环境变量注入密码，避免直接硬编码在 yaml 中
-    # 注意：在生产环境中，为了彻底防止 ps 命令泄露，建议挂载 redis.conf 配置文件
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
-    environment:
-      - TZ=Asia/Shanghai
-    volumes:
-      - redis_data:/data
-    networks:
-      - backend-network
-    # [Task 3.2] Redis 通常占用较低，给予适当限制即可
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: gemini-proxy-prometheus
-    restart: always
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    ports:
-      # [Task 3.3] 收敛攻击面：仅绑定到 127.0.0.1，禁止公网直接访问
-      - "127.0.0.1:9090:9090"
-    networks:
-      - default
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: gemini-proxy-grafana
-    restart: always
-    volumes:
-      - grafana_data:/var/lib/grafana
-    ports:
-      # [Task 3.3] 收敛攻击面：仅绑定到 127.0.0.1
-      - "127.0.0.1:3000:3000"
-    networks:
-      - default
-
-volumes:
-  redis_data:
-  prometheus_data:
-  grafana_data:
-
-networks:
-  backend-network:
-    internal: true
-  default:
-    external: false
+    # 日志管理
+    # 限制日志文件大小，防止长期运行占满磁盘
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
