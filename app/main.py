@@ -15,7 +15,8 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 # [New] 引入日志基建
 from app.logger_setup import setup_logging, request_id_ctx
-from app.core import slot_manager, ProxyRequest, UPSTREAM_URL
+# [Fix] 引入 BASE_URL 而不是 UPSTREAM_URL
+from app.core import slot_manager, ProxyRequest, BASE_URL
 
 # --- 初始化 ---
 # 1. 启动结构化日志
@@ -35,14 +36,10 @@ async def smart_frame_processor(session: AsyncSession, resp, slot_idx: int, redi
             if not chunk: continue
             yield chunk.decode('utf-8')
     except Exception as e:
-        # [Fix: 数据完整性] 记录详细错误，并尝试以 JSON 格式返回错误信息（如果流还未开始或刚好在断点）
         logger.error(f"stream_interrupted", extra={"extra_data": {"slot": slot_idx, "error": str(e)}})
-        # 尝试发送一个 SSE 风格的错误注释，防止前端 JSON 解析完全崩溃
-        # 注意：如果 JSON 结构已经截断，这里追加内容仍可能导致解析失败，但在 SSE 模式下通常更安全
         yield f'\n\n{{"error": "Stream Interrupted: {str(e)}"}}\n\n'
     finally:
         await session.close()
-        # 依然需要记录成功释放，哪怕是异常结束
         await slot_manager.report_status(slot_idx, 200)
         await slot_manager.release_slot(slot_idx, redis)
         logger.info(f"slot_released", extra={"extra_data": {"slot": slot_idx}})
@@ -50,13 +47,10 @@ async def smart_frame_processor(session: AsyncSession, resp, slot_idx: int, redi
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global REDIS_CLIENT
-    # 启动时加载一次配置
     slot_manager.load_config()
     
-    # [Fix: 安全性] 启动时检查 GATEWAY_SECRET 是否设置
     if not GATEWAY_SECRET:
         logger.critical("🚨 GATEWAY_SECRET environment variable is missing! The gateway is shutting down for security.")
-        # 在 Docker 环境中，这会导致容器退出，这是预期的 Fail-Secure 行为
         raise RuntimeError("GATEWAY_SECRET is required.")
 
     REDIS_CLIENT = AsyncRedis(
@@ -73,19 +67,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="S.W.A.R.M. Gateway", lifespan=lifespan)
 Instrumentator().instrument(app).expose(app)
 
-# --- 2. [中间件] 全链路追踪 (Tracing Middleware) ---
+# --- 2. [中间件] 全链路追踪 ---
 @app.middleware("http")
 async def structured_logging_middleware(request: Request, call_next):
-    # A. 继承上游 Trace ID 或生成新 ID
     trace_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     token = request_id_ctx.set(trace_id)
-    
     start_time = time.time()
     try:
         response = await call_next(request)
-        
         process_time = (time.time() - start_time) * 1000
-        # 记录结构化访问日志
         logger.info(
             "request_completed", 
             extra={
@@ -98,20 +88,14 @@ async def structured_logging_middleware(request: Request, call_next):
                 }
             }
         )
-        # 返回 ID 给客户端
         response.headers["X-Request-ID"] = trace_id
         return response
     finally:
         request_id_ctx.reset(token)
 
 # --- 3. [系统接口] ---
-
-# [Fix: 致命问题] 添加健康检查接口，防止 Docker 循环重启
 @app.get("/health")
 async def health_check():
-    """
-    K8s / Docker Healthcheck Endpoint
-    """
     if not REDIS_CLIENT:
         raise HTTPException(503, "Redis Not Connected")
     return {"status": "healthy", "timestamp": time.time()}
@@ -120,7 +104,6 @@ async def health_check():
 
 @app.post("/v1/chat/completions")
 async def tactical_proxy(request: Request, body: ProxyRequest):
-    # [Fix: 安全性] 强制鉴权 (Fail-Closed)
     if not GATEWAY_SECRET:
         raise HTTPException(500, "Gateway Security Misconfiguration")
         
@@ -136,8 +119,17 @@ async def tactical_proxy(request: Request, body: ProxyRequest):
     slot_idx = await slot_manager.get_best_slot(REDIS_CLIENT)
     slot = slot_manager.slots[slot_idx]
     
-    # 记录决策日志
-    logger.info("slot_selected", extra={"extra_data": {"slot_id": slot_idx, "model": body.model}})
+    # [Fix] 动态构建目标 URL
+    # 如果请求体里没有 model，默认使用 gemini-2.5-flash
+    target_model = body.model or "gemini-2.5-flash"
+    # 构造完整 URL: https://.../v1beta/models/{model}:generateContent
+    target_url = f"{BASE_URL}/{target_model}:generateContent"
+    
+    logger.info("slot_selected", extra={"extra_data": {
+        "slot_id": slot_idx, 
+        "target_model": target_model,
+        "proxy_used": bool(slot.get("proxy"))
+    }})
 
     session = AsyncSession(
         impersonate=slot.get("impersonate", random.choice(IMPERSONATE_LIST)),
@@ -146,8 +138,9 @@ async def tactical_proxy(request: Request, body: ProxyRequest):
     )
     
     try:
+        # 使用动态构建的 URL
         resp = await session.post(
-            f"{UPSTREAM_URL}?key={slot['key']}", 
+            f"{target_url}?key={slot['key']}", 
             json=body.model_dump(exclude_none=True), 
             stream=True
         )
@@ -176,10 +169,6 @@ async def tactical_proxy(request: Request, body: ProxyRequest):
 
 @app.get("/v1/pool/status")
 async def get_pool_status(request: Request):
-    """
-    [自检接口] Brain 用此接口检查连通性
-    """
-    # [Fix: 安全性] 强制鉴权
     if not GATEWAY_SECRET:
         raise HTTPException(500, "Gateway Security Misconfiguration")
 
@@ -207,10 +196,6 @@ async def get_pool_status(request: Request):
 
 @app.post("/v1/admin/reload_config")
 async def reload_configuration(request: Request):
-    """
-    [热重载接口] 管理员手动触发配置更新
-    """
-    # [Fix: 安全性] 强制鉴权
     if not GATEWAY_SECRET:
         raise HTTPException(500, "Gateway Security Misconfiguration")
 
