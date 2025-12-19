@@ -10,18 +10,19 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field, ValidationError
 from redis.asyncio import Redis as AsyncRedis
 
-# --- 日志与常量配置 ---
-# [Update] 日志现在由 logger_setup 统一接管，这里只获取实例
+# --- 日志配置 ---
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = "config.json"
 DEFAULT_CONCURRENCY = 5
 
-# [Fix] 移除写死的 UPSTREAM_URL，改为基础 URL
-# 之前的写法会导致所有请求都被强制路由到 gemini-2.5-flash
-BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+# [Fix] 核心修复：BASE_URL 必须是一个函数！
+# 之前的错误是因为把它定义成了字符串，导致 main.py 调用时报错 'str object is not callable'
+def BASE_URL(model: str = "gemini-2.5-flash") -> str:
+    # 默认使用 SSE 流式接口，兼容性最好
+    return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse"
 
-# --- Redis Lua 脚本：确保分布式环境下的原子并发控制 ---
+# --- Redis Lua 脚本 ---
 LUA_ACQUIRE_SCRIPT = """
 local key = KEYS[1]
 local limit = tonumber(ARGV[1])
@@ -38,15 +39,12 @@ end
 """
 
 class ProxyRequest(BaseModel):
-    """适配 Google Gemini 官方及 Brain 层透传的 Payload 结构"""
     contents: List[Dict[str, Any]]
     system_instruction: Optional[Dict[str, Any]] = None
     generationConfig: Optional[Dict[str, Any]] = None
     safetySettings: Optional[List[Dict[str, Any]]] = None
-    # [New] 支持透传模型名称，默认为 Flash
     model: Optional[str] = "gemini-2.5-flash"
 
-# [New] 严格的配置模型 (Schema Guard)
 class SlotConfig(BaseModel):
     key: str = Field(..., min_length=10, description="Gemini API Key")
     comment: Optional[str] = "Default Slot"
@@ -56,44 +54,32 @@ class SlotConfig(BaseModel):
     is_active: bool = Field(True, description="是否启用该 Slot")
 
 class SlotManager:
-    """
-    核心调度器：负责多 Key 权重轮询、动态熔断与分布式锁管理。
-    """
     def __init__(self):
         self.slots: List[Dict] = []
         self.states: Dict[int, Dict] = {}
         self.config_version = 0
 
     def load_config(self) -> Dict[str, Any]:
-        """
-        [重构] 工业级加载逻辑：读取 -> 校验 -> 原子替换
-        """
         if not os.path.exists(CONFIG_PATH):
             logger.error(f"❌ 配置文件不存在: {CONFIG_PATH}")
             return {"status": "error", "details": "Config file not found"}
 
         try:
-            # 1. 读取文件 (IO 阶段)
-            # [Fix] 核心优化：使用 utf-8-sig 自动处理 Windows BOM 头
-            # 这样无论 config.json 是用记事本还是 PowerShell 生成的，都能完美读取喵！
+            # 依然保留 utf-8-sig 以完美兼容 Windows 文件
             with open(CONFIG_PATH, 'r', encoding='utf-8-sig') as f:
                 raw_content = os.path.expandvars(f.read())
                 raw_json = json.loads(raw_content)
 
-            # 2. 严格校验 (Validation 阶段)
             validated_slots = [SlotConfig(**item).model_dump() for item in raw_json]
             if not validated_slots:
                 raise ValueError("配置列表为空")
 
-            # 3. 计算状态并原子替换 (Atomic Swap 阶段)
             new_states = {}
             for idx, slot in enumerate(validated_slots):
-                # 尽量保留旧的状态（比如熔断冷却时间）
                 key_hash = hashlib.md5(slot['key'].encode()).hexdigest()
                 concurrency_key = f"swarm:conc:{key_hash}"
                 
                 existing_state = None
-                # 尝试查找旧状态
                 for old_s in self.states.values():
                     if old_s.get("concurrency_key") == concurrency_key:
                         existing_state = old_s
@@ -101,7 +87,6 @@ class SlotManager:
                 
                 if existing_state:
                     new_states[idx] = existing_state
-                    # 如果被软禁用，强制权重归零
                     if not slot['is_active']:
                         new_states[idx]["weight"] = 0.0
                 else:
@@ -112,7 +97,6 @@ class SlotManager:
                         "cool_down_until": 0
                     }
 
-            # 原子切换
             self.slots = validated_slots
             self.states = new_states
             self.config_version += 1
@@ -139,7 +123,6 @@ class SlotManager:
             return {"status": "error", "details": err_msg}
 
     async def get_best_slot(self, redis: AsyncRedis) -> int:
-        """加权随机算法 + 动态健康检查"""
         if not self.slots:
             raise HTTPException(503, "API Key Pool is empty")
         
@@ -148,19 +131,12 @@ class SlotManager:
         weights = []
 
         for idx, state in self.states.items():
-            # 1. 熔断/冷却检查
-            if state["cool_down_until"] > now:
-                continue
-            
-            # 2. 活跃检查
-            if state["weight"] <= 0:
-                continue
+            if state["cool_down_until"] > now: continue
+            if state["weight"] <= 0: continue
 
-            # 3. 并发阈值预检
             limit = self.slots[idx].get("max_concurrency", DEFAULT_CONCURRENCY)
             curr = await redis.get(state["concurrency_key"])
-            if curr and int(curr) >= limit:
-                continue
+            if curr and int(curr) >= limit: continue
             
             candidates.append(idx)
             weights.append(state["weight"])
@@ -169,12 +145,10 @@ class SlotManager:
             logger.warning("all_slots_busy_or_cooldown")
             raise HTTPException(503, "Upstream capacity exhausted")
 
-        # 4. 加权选择
         selected_idx = random.choices(candidates, weights=weights, k=1)[0]
         state = self.states[selected_idx]
         limit = self.slots[selected_idx].get("max_concurrency", DEFAULT_CONCURRENCY)
         
-        # 5. 执行 Lua 原子抢占
         res = await redis.eval(LUA_ACQUIRE_SCRIPT, 1, state["concurrency_key"], limit, 120)
         if res == -1:
             return await self.get_best_slot(redis)
