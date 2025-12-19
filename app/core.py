@@ -1,4 +1,3 @@
-# app/core.py
 import json
 import os
 import time
@@ -75,7 +74,8 @@ class SlotManager:
 
         try:
             # 1. 读取文件 (IO 阶段)
-            # [Fix] 使用 utf-8-sig 自动处理 Windows BOM 头
+            # [Fix] 核心优化：使用 utf-8-sig 自动处理 Windows BOM 头
+            # 这样无论 config.json 是用记事本还是 PowerShell 生成的，都能完美读取喵！
             with open(CONFIG_PATH, 'r', encoding='utf-8-sig') as f:
                 raw_content = os.path.expandvars(f.read())
                 raw_json = json.loads(raw_content)
