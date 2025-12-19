@@ -13,42 +13,31 @@ from fastapi.responses import StreamingResponse
 from curl_cffi.requests import AsyncSession
 from redis.asyncio import Redis as AsyncRedis
 
-# 导入网关核心组件
-from app.core import slot_manager, ProxyRequest, UPSTREAM_URL
+# [Fix] 引入 BASE_URL
+from app.core import slot_manager, ProxyRequest, BASE_URL
 
-# 加载本地 .env 配置
 load_dotenv()
 
 # --- 日志配置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Gateway-Local")
 
-# --- 环境配置 (本地默认值) ---
+# --- 环境配置 ---
 GATEWAY_SECRET = os.getenv("GATEWAY_SECRET", "sk-swarm-local-test-key")
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")  # 本地运行时通常是 localhost
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost") 
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
-# 全局 Redis 客户端
 REDIS_CLIENT: Optional[AsyncRedis] = None
-
-# 默认指纹池
 IMPERSONATE_LIST = ["chrome110", "chrome111", "safari15_5", "edge101"]
 
 async def smart_frame_processor(session: AsyncSession, resp, slot_idx: int, redis: AsyncRedis) -> AsyncGenerator[str, None]:
-    """
-    本地流式转发引擎。
-    确保在本地调试时也能实时看到 Gemini 的逐字输出喵。
-    """
     try:
         async for chunk in resp.aiter_content():
             if not chunk: continue
-            # 本地调试可以加上颜色或额外日志
             yield chunk.decode('utf-8')
-            
     except Exception as e:
         logger.error(f"❌ [Local] 流式中断: {e}")
-        # [Fix: 数据完整性] 尝试友好输出错误
         yield f'\n\n[LOCAL_ERROR] Stream interrupted: {str(e)}\n\n'
     finally:
         await session.close()
@@ -58,17 +47,11 @@ async def smart_frame_processor(session: AsyncSession, resp, slot_idx: int, redi
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """本地生命周期管理"""
     global REDIS_CLIENT
-    
-    # [Fix: 安全性] 检查密钥 (本地只做警告，方便调试)
     if GATEWAY_SECRET == "sk-swarm-local-test-key":
         logger.warning("⚠️ [Security] 您正在使用默认测试密钥，请勿在生产环境使用！")
 
-    # 1. 尝试加载 config.json
     slot_manager.load_config()
-    
-    # 2. 初始化 Redis 连接
     try:
         REDIS_CLIENT = AsyncRedis(
             host=REDIS_HOST, 
@@ -76,19 +59,16 @@ async def lifespan(app: FastAPI):
             password=REDIS_PASSWORD, 
             decode_responses=True
         )
-        # 测试连接
         await REDIS_CLIENT.ping()
         logger.info(f"🐱 本地网关已连接到 Redis ({REDIS_HOST}:{REDIS_PORT}) 喵！")
     except Exception as e:
         logger.error(f"❌ Redis 连接失败，请确保本地 Redis 已启动: {e}")
-        
     yield
     if REDIS_CLIENT:
         await REDIS_CLIENT.close()
 
 app = FastAPI(title="S.W.A.R.M. Gateway (Local Edition)", lifespan=lifespan)
 
-# [Fix: 致命问题] 本地也加上健康检查，方便本地 Docker 测试
 @app.get("/health")
 async def health_check():
     if not REDIS_CLIENT:
@@ -97,10 +77,6 @@ async def health_check():
 
 @app.post("/v1/chat/completions")
 async def tactical_proxy_local(request: Request, body: ProxyRequest):
-    """
-    本地转发端点：完全同步生产环境的鉴权与调度逻辑。
-    """
-    # 1. 鉴权 [Fix: 同步生产环境的强校验逻辑]
     auth = request.headers.get("Authorization") or ""
     if not secrets.compare_digest(auth, f"Bearer {GATEWAY_SECRET}"):
         logger.warning("🚨 [Local] 未授权的访问尝试！")
@@ -109,11 +85,13 @@ async def tactical_proxy_local(request: Request, body: ProxyRequest):
     if not REDIS_CLIENT:
         raise HTTPException(500, "Redis not available in local environment")
 
-    # 2. 调度 Slot (包含本地并发限制)
     slot_idx = await slot_manager.get_best_slot(REDIS_CLIENT)
     slot = slot_manager.slots[slot_idx]
     
-    # 3. 构造本地会话 (适配 config.json 中的 impersonate 和 proxy)
+    # [Fix] 本地版也支持动态路由
+    target_model = body.model or "gemini-2.5-flash"
+    target_url = f"{BASE_URL}/{target_model}:generateContent"
+    
     target_impersonate = slot.get("impersonate", random.choice(IMPERSONATE_LIST))
     target_proxy = slot.get("proxy")
     
@@ -124,11 +102,10 @@ async def tactical_proxy_local(request: Request, body: ProxyRequest):
     )
     
     try:
-        logger.info(f"📡 [Local] 调度 Slot {slot_idx} | 模拟: {target_impersonate} | 代理: {target_proxy or '直连'}")
+        logger.info(f"📡 [Local] [{target_model}] Slot {slot_idx} | 模拟: {target_impersonate}")
         
-        # 4. 执行请求
         resp = await session.post(
-            f"{UPSTREAM_URL}?key={slot['key']}", 
+            f"{target_url}?key={slot['key']}", 
             json=body.model_dump(exclude_none=True), 
             stream=True
         )
@@ -152,5 +129,4 @@ async def tactical_proxy_local(request: Request, body: ProxyRequest):
         raise HTTPException(502, detail=f"Local Gateway Error: {str(e)}")
 
 if __name__ == "__main__":
-    # 本地启动命令：python -m app.main_local
-    uvicorn.run(app, host="0.0.0.0", port=8001) # 默认 8001 端口避免与生产冲突
+    uvicorn.run(app, host="0.0.0.0", port=8001)
