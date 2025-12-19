@@ -1,23 +1,72 @@
 [
   {
-    "comment": "Slot 1: 美国节点 - 高并发",
-    "key": "AIzaSy...your_gemini_key_1",
-    "proxy": "http://user:pass@us-proxy:7890",
+    "comment": "Slot 01 - Tokyo Direct",
+    "key": "AIzaSy...Key_01",
+    "proxy": null,
     "impersonate": "chrome110",
-    "max_concurrency": 8
+    "max_concurrency": 1
   },
   {
-    "comment": "Slot 2: 日本节点 - 稳定备份",
-    "key": "AIzaSy...your_gemini_key_2",
-    "proxy": "http://user:pass@jp-proxy:7890",
+    "comment": "Slot 02 - Tokyo Direct",
+    "key": "AIzaSy...Key_02",
+    "proxy": null,
+    "impersonate": "chrome111",
+    "max_concurrency": 1
+  },
+  {
+    "comment": "Slot 03 - Tokyo Direct",
+    "key": "AIzaSy...Key_03",
+    "proxy": null,
     "impersonate": "safari15_5",
-    "max_concurrency": 5
+    "max_concurrency": 1
   },
   {
-    "comment": "Slot 3: 备用低频率节点",
-    "key": "AIzaSy...your_gemini_key_3",
+    "comment": "Slot 04 - Tokyo Direct",
+    "key": "AIzaSy...Key_04",
     "proxy": null,
     "impersonate": "edge101",
-    "max_concurrency": 2
+    "max_concurrency": 1
+  },
+  {
+    "comment": "Slot 05 - Tokyo Direct",
+    "key": "AIzaSy...Key_05",
+    "proxy": null,
+    "impersonate": "chrome110",
+    "max_concurrency": 1
+  },
+  {
+    "comment": "Slot 06 - Tokyo Direct",
+    "key": "AIzaSy...Key_06",
+    "proxy": null,
+    "impersonate": "chrome111",
+    "max_concurrency": 1
+  },
+  {
+    "comment": "Slot 07 - Tokyo Direct",
+    "key": "AIzaSy...Key_07",
+    "proxy": null,
+    "impersonate": "safari15_5",
+    "max_concurrency": 1
+  },
+  {
+    "comment": "Slot 08 - Tokyo Direct",
+    "key": "AIzaSy...Key_08",
+    "proxy": null,
+    "impersonate": "edge101",
+    "max_concurrency": 1
+  },
+  {
+    "comment": "Slot 09 - Tokyo Direct",
+    "key": "AIzaSy...Key_09",
+    "proxy": null,
+    "impersonate": "chrome110",
+    "max_concurrency": 1
+  },
+  {
+    "comment": "Slot 10 - Tokyo Direct",
+    "key": "AIzaSy...Key_10",
+    "proxy": null,
+    "impersonate": "chrome111",
+    "max_concurrency": 1
   }
 ]
