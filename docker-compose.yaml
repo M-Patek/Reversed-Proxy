@@ -4,6 +4,7 @@ version: '3.8'
 # 🌩️ S.W.A.R.M. Gateway - Cloud Production Compose
 # 专为东京节点设计：无状态、自动重启、环境注入
 # [Update] Added Redis Service & Config Volume
+# [Update] Added Prometheus Monitoring Stack
 # -------------------------------------------------------------------
 
 services:
@@ -30,6 +31,14 @@ services:
       # 确保连接到下方定义的 redis 服务
       - REDIS_HOST=redis
     
+    # [FIX 4] 网络别名设置
+    # 为了匹配 prometheus.yml 中的 "targets: ['gemini-proxy:8000']"
+    # 我们必须让这个服务能响应 "gemini-proxy" 这个主机名
+    networks:
+      default:
+        aliases:
+          - gemini-proxy
+
     # [FIX 1] 挂载配置文件
     # 必须把本地的 config.json 映射进去，否则网关没有 Key 可用！
     volumes:
@@ -80,6 +89,27 @@ services:
       timeout: 5s
       retries: 3
 
-# 定义持久化卷，防止 Redis 重启后丢失限流数据
+  # [FIX 5] 添加 Prometheus 监控服务
+  # 既然您准备了 prometheus.yml，这里必须把监控跑起来喵！
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: swarm_monitor
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      # 挂载本地的 prometheus 目录中的配置文件
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      # 持久化监控数据
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    depends_on:
+      - gateway
+
+# 定义持久化卷，防止数据丢失
 volumes:
   redis_data:
+  prometheus_data:
