@@ -1,3 +1,4 @@
+# app/core.py
 import json
 import os
 import time
@@ -74,7 +75,8 @@ class SlotManager:
 
         try:
             # 1. 读取文件 (IO 阶段)
-            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+            # [Fix] 使用 utf-8-sig 自动处理 Windows BOM 头
+            with open(CONFIG_PATH, 'r', encoding='utf-8-sig') as f:
                 raw_content = os.path.expandvars(f.read())
                 raw_json = json.loads(raw_content)
 
