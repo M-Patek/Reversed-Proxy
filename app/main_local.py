@@ -48,7 +48,8 @@ async def smart_frame_processor(session: AsyncSession, resp, slot_idx: int, redi
             
     except Exception as e:
         logger.error(f"❌ [Local] 流式中断: {e}")
-        yield f"\n[LOCAL_GATEWAY_ERROR] {str(e)}\n"
+        # [Fix: 数据完整性] 尝试友好输出错误
+        yield f'\n\n[LOCAL_ERROR] Stream interrupted: {str(e)}\n\n'
     finally:
         await session.close()
         await slot_manager.report_status(slot_idx, 200)
@@ -59,6 +60,11 @@ async def smart_frame_processor(session: AsyncSession, resp, slot_idx: int, redi
 async def lifespan(app: FastAPI):
     """本地生命周期管理"""
     global REDIS_CLIENT
+    
+    # [Fix: 安全性] 检查密钥 (本地只做警告，方便调试)
+    if GATEWAY_SECRET == "sk-swarm-local-test-key":
+        logger.warning("⚠️ [Security] 您正在使用默认测试密钥，请勿在生产环境使用！")
+
     # 1. 尝试加载 config.json
     slot_manager.load_config()
     
@@ -82,12 +88,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="S.W.A.R.M. Gateway (Local Edition)", lifespan=lifespan)
 
+# [Fix: 致命问题] 本地也加上健康检查，方便本地 Docker 测试
+@app.get("/health")
+async def health_check():
+    if not REDIS_CLIENT:
+        return {"status": "unhealthy", "reason": "redis_disconnected"}
+    return {"status": "healthy"}
+
 @app.post("/v1/chat/completions")
 async def tactical_proxy_local(request: Request, body: ProxyRequest):
     """
     本地转发端点：完全同步生产环境的鉴权与调度逻辑。
     """
-    # 1. 鉴权
+    # 1. 鉴权 [Fix: 同步生产环境的强校验逻辑]
     auth = request.headers.get("Authorization") or ""
     if not secrets.compare_digest(auth, f"Bearer {GATEWAY_SECRET}"):
         logger.warning("🚨 [Local] 未授权的访问尝试！")
