@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = "config.json"
 DEFAULT_CONCURRENCY = 5
-UPSTREAM_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+
+# [Fix] 移除写死的 UPSTREAM_URL，改为基础 URL
+# 之前的写法会导致所有请求都被强制路由到 gemini-2.5-flash
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # --- Redis Lua 脚本：确保分布式环境下的原子并发控制 ---
 LUA_ACQUIRE_SCRIPT = """
@@ -40,7 +43,7 @@ class ProxyRequest(BaseModel):
     system_instruction: Optional[Dict[str, Any]] = None
     generationConfig: Optional[Dict[str, Any]] = None
     safetySettings: Optional[List[Dict[str, Any]]] = None
-    # [New] 支持透传模型名称，方便日志记录
+    # [New] 支持透传模型名称，默认为 Flash
     model: Optional[str] = "gemini-2.5-flash"
 
 # [New] 严格的配置模型 (Schema Guard)
