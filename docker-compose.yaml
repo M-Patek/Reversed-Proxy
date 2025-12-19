@@ -1,70 +1,65 @@
 version: '3.8'
 
-# -------------------------------------------------------------------
-# 🌩️ S.W.A.R.M. Gateway - Tokyo Optimized Compose
-# 策略：单 IP 直连、多 Key 轮询、高性能监控
-# -------------------------------------------------------------------
-
 services:
+  # 1. 数据库服务 (Redis)
+  redis:
+    image: redis:alpine
+    container_name: swarm_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - swarm_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  # 2. 核心网关服务 (Gateway)
   gateway:
     build: .
-    container_name: swarm_gateway_tokyo
-    restart: always
+    container_name: swarm_gateway
     ports:
       - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      - LOG_LEVEL=INFO
-    # 网络别名，用于 Prometheus 抓取
-    networks:
-      default:
-        aliases:
-          - gemini-proxy
     volumes:
+      # 挂载配置文件
       - ./config.json:/app/config.json
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # 设置时区，方便看日志
+      - TZ=Asia/Shanghai
     depends_on:
-      - redis
-    # 增加 DNS 优化，使用 Google DNS 以获得最快的 API 解析速度
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
+      redis:
+        condition: service_healthy
+    networks:
+      - swarm_net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-
-  redis:
-    image: redis:7-alpine
-    container_name: swarm_redis_tokyo
     restart: always
-    command: redis-server --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
 
-  # 监控组件：实时观察 10 个 Key 的 429 (Rate Limit) 触发情况
+  # 3. 监控服务 (Prometheus)
+  # 云端标配，配合 prometheus.yml 使用
   prometheus:
-    image: prom/prometheus:v2.45.0
-    container_name: swarm_monitor_tokyo
-    restart: always
+    image: prom/prometheus:latest
+    container_name: swarm_monitor
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
     ports:
       - "9090:9090"
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    depends_on:
-      - gateway
+    networks:
+      - swarm_net
+    restart: always
+
+networks:
+  swarm_net:
+    driver: bridge
 
 volumes:
   redis_data:
