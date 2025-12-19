@@ -35,8 +35,11 @@ async def smart_frame_processor(session: AsyncSession, resp, slot_idx: int, redi
             if not chunk: continue
             yield chunk.decode('utf-8')
     except Exception as e:
+        # [Fix: 数据完整性] 记录详细错误，并尝试以 JSON 格式返回错误信息（如果流还未开始或刚好在断点）
         logger.error(f"stream_interrupted", extra={"extra_data": {"slot": slot_idx, "error": str(e)}})
-        yield f"\n[GATEWAY_ERROR] {str(e)}\n"
+        # 尝试发送一个 SSE 风格的错误注释，防止前端 JSON 解析完全崩溃
+        # 注意：如果 JSON 结构已经截断，这里追加内容仍可能导致解析失败，但在 SSE 模式下通常更安全
+        yield f'\n\n{{"error": "Stream Interrupted: {str(e)}"}}\n\n'
     finally:
         await session.close()
         # 依然需要记录成功释放，哪怕是异常结束
@@ -50,6 +53,12 @@ async def lifespan(app: FastAPI):
     # 启动时加载一次配置
     slot_manager.load_config()
     
+    # [Fix: 安全性] 启动时检查 GATEWAY_SECRET 是否设置
+    if not GATEWAY_SECRET:
+        logger.critical("🚨 GATEWAY_SECRET environment variable is missing! The gateway is shutting down for security.")
+        # 在 Docker 环境中，这会导致容器退出，这是预期的 Fail-Secure 行为
+        raise RuntimeError("GATEWAY_SECRET is required.")
+
     REDIS_CLIENT = AsyncRedis(
         host=REDIS_HOST, 
         password=REDIS_PASSWORD, 
@@ -95,15 +104,30 @@ async def structured_logging_middleware(request: Request, call_next):
     finally:
         request_id_ctx.reset(token)
 
-# --- 3. [业务接口] ---
+# --- 3. [系统接口] ---
+
+# [Fix: 致命问题] 添加健康检查接口，防止 Docker 循环重启
+@app.get("/health")
+async def health_check():
+    """
+    K8s / Docker Healthcheck Endpoint
+    """
+    if not REDIS_CLIENT:
+        raise HTTPException(503, "Redis Not Connected")
+    return {"status": "healthy", "timestamp": time.time()}
+
+# --- 4. [业务接口] ---
 
 @app.post("/v1/chat/completions")
 async def tactical_proxy(request: Request, body: ProxyRequest):
-    # 鉴权
-    if GATEWAY_SECRET:
-        auth = request.headers.get("Authorization") or ""
-        if not secrets.compare_digest(auth, f"Bearer {GATEWAY_SECRET}"):
-            raise HTTPException(401, "Unauthorized")
+    # [Fix: 安全性] 强制鉴权 (Fail-Closed)
+    if not GATEWAY_SECRET:
+        raise HTTPException(500, "Gateway Security Misconfiguration")
+        
+    auth = request.headers.get("Authorization") or ""
+    if not secrets.compare_digest(auth, f"Bearer {GATEWAY_SECRET}"):
+        logger.warning(f"unauthorized_access_attempt", extra={"extra_data": {"ip": request.client.host}})
+        raise HTTPException(401, "Unauthorized")
 
     if not REDIS_CLIENT:
         raise HTTPException(500, "Redis Connection Lost")
@@ -148,17 +172,20 @@ async def tactical_proxy(request: Request, body: ProxyRequest):
         logger.error("gateway_proxy_error", exc_info=True)
         raise HTTPException(502, detail=f"Bad Gateway: {str(e)}")
 
-# --- 4. [管理接口] ---
+# --- 5. [管理接口] ---
 
 @app.get("/v1/pool/status")
 async def get_pool_status(request: Request):
     """
     [自检接口] Brain 用此接口检查连通性
     """
-    if GATEWAY_SECRET:
-        auth = request.headers.get("Authorization") or ""
-        if not secrets.compare_digest(auth, f"Bearer {GATEWAY_SECRET}"):
-            raise HTTPException(401, "Unauthorized")
+    # [Fix: 安全性] 强制鉴权
+    if not GATEWAY_SECRET:
+        raise HTTPException(500, "Gateway Security Misconfiguration")
+
+    auth = request.headers.get("Authorization") or ""
+    if not secrets.compare_digest(auth, f"Bearer {GATEWAY_SECRET}"):
+        raise HTTPException(401, "Unauthorized")
 
     status_report = []
     for idx, slot in enumerate(slot_manager.slots):
@@ -183,10 +210,13 @@ async def reload_configuration(request: Request):
     """
     [热重载接口] 管理员手动触发配置更新
     """
-    if GATEWAY_SECRET:
-        auth = request.headers.get("Authorization") or ""
-        if not secrets.compare_digest(auth, f"Bearer {GATEWAY_SECRET}"):
-            raise HTTPException(401, "Admin Access Required")
+    # [Fix: 安全性] 强制鉴权
+    if not GATEWAY_SECRET:
+        raise HTTPException(500, "Gateway Security Misconfiguration")
+
+    auth = request.headers.get("Authorization") or ""
+    if not secrets.compare_digest(auth, f"Bearer {GATEWAY_SECRET}"):
+        raise HTTPException(401, "Admin Access Required")
     
     result = slot_manager.load_config()
     
