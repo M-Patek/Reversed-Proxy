@@ -3,6 +3,7 @@ version: '3.8'
 # -------------------------------------------------------------------
 # 🌩️ S.W.A.R.M. Gateway - Cloud Production Compose
 # 专为东京节点设计：无状态、自动重启、环境注入
+# [Update] Added Redis Service & Config Volume
 # -------------------------------------------------------------------
 
 services:
@@ -13,28 +14,33 @@ services:
     container_name: swarm_gateway_prod
     
     # 【核心策略】永远自动重启
-    # 无论是程序崩溃还是服务器重启，Docker 都会尽力把服务拉起来
     restart: always
     
     # 端口映射
-    # 8000 是服务端口
     ports:
       - "8000:8000"
     
     # 环境变量注入
-    # 生产环境直接读取宿主机的 .env 文件
-    # 包含：GEMINI_API_KEYS, GATEWAY_SECRET 等
     env_file:
       - .env
     
     environment:
-      # 显式覆盖一些生产环境特有的变量
       - LOG_LEVEL=INFO
       - ENVIRONMENT=production
+      # 确保连接到下方定义的 redis 服务
+      - REDIS_HOST=redis
     
+    # [FIX 1] 挂载配置文件
+    # 必须把本地的 config.json 映射进去，否则网关没有 Key 可用！
+    volumes:
+      - ./config.json:/app/config.json
+    
+    # [FIX 2] 依赖关系
+    # 确保 Redis 先启动，网关再启动
+    depends_on:
+      - redis
+
     # 健康检查
-    # 每 30 秒检查一次 /health 接口
-    # 如果连续 3 次失败，Docker 会标记容器为 unhealthy (配合编排工具可自动重启)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -42,20 +48,38 @@ services:
       retries: 3
       start_period: 10s
 
-    # 资源限制 (防止内存泄漏导致服务器死机)
-    # 根据你的 VPS 配置适当调整，这里按 2GB 内存 VPS 的标准配置
     deploy:
       resources:
         limits:
-          cpus: '1.5'        # 限制使用 1.5 个核
-          memory: 1024M      # 限制最大使用 1GB 内存
+          cpus: '1.5'
+          memory: 1024M
         reservations:
-          memory: 256M       # 保证至少有 256MB 可用
+          memory: 256M
 
-    # 日志管理
-    # 限制日志文件大小，防止长期运行占满磁盘
     logging:
       driver: "json-file"
       options:
         max-size: "20m"
         max-file: "3"
+
+  # [FIX 3] 添加 Redis 服务
+  redis:
+    image: redis:7-alpine
+    container_name: swarm_redis_db
+    restart: always
+    # 使用 .env 中的密码启动 Redis
+    # 注意：这里使用了 Shell 变量替换，Docker 会自动读取 .env 中的值
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# 定义持久化卷，防止 Redis 重启后丢失限流数据
+volumes:
+  redis_data:
