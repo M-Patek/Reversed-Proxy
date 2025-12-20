@@ -15,7 +15,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 # [New] 引入日志基建
 from app.logger_setup import setup_logging, request_id_ctx
-# [Fix] 引入 BASE_URL 而不是 UPSTREAM_URL
+# [Fix] 引入 BASE_URL (函数) 而不是 UPSTREAM_URL
 from app.core import slot_manager, ProxyRequest, BASE_URL
 
 # --- 初始化 ---
@@ -119,11 +119,16 @@ async def tactical_proxy(request: Request, body: ProxyRequest):
     slot_idx = await slot_manager.get_best_slot(REDIS_CLIENT)
     slot = slot_manager.slots[slot_idx]
     
-    # [Fix] 动态构建目标 URL
+    # [Fix] 动态构建目标 URL - 修复了之前的 f"{BASE_URL}..." 错误
     # 如果请求体里没有 model，默认使用 gemini-2.5-flash
     target_model = body.model or "gemini-2.5-flash"
-    # 构造完整 URL: https://.../v1beta/models/{model}:generateContent
-    target_url = f"{BASE_URL}/{target_model}:generateContent"
+    
+    # 1. 调用 core.py 里的函数获取带参数的 URL (例如 ...?alt=sse)
+    upstream_url = BASE_URL(target_model)
+    
+    # 2. 智能拼接 API Key (检查是否已经有参数了)
+    connector = "&" if "?" in upstream_url else "?"
+    final_url = f"{upstream_url}{connector}key={slot['key']}"
     
     logger.info("slot_selected", extra={"extra_data": {
         "slot_id": slot_idx, 
@@ -138,9 +143,9 @@ async def tactical_proxy(request: Request, body: ProxyRequest):
     )
     
     try:
-        # 使用动态构建的 URL
+        # 使用修复后的 final_url
         resp = await session.post(
-            f"{target_url}?key={slot['key']}", 
+            final_url, 
             json=body.model_dump(exclude_none=True), 
             stream=True
         )
