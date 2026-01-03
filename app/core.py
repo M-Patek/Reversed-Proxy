@@ -17,7 +17,6 @@ CONFIG_PATH = "config.json"
 DEFAULT_CONCURRENCY = 5
 
 # [Fix] 核心修复：BASE_URL 必须是一个函数！
-# 之前的错误是因为把它定义成了字符串，导致 main.py 调用时报错 'str object is not callable'
 def BASE_URL(model: str = "gemini-2.5-flash") -> str:
     # 默认使用 SSE 流式接口，兼容性最好
     return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse"
@@ -39,7 +38,8 @@ end
 """
 
 class ProxyRequest(BaseModel):
-    contents: List[Dict[str, Any]]
+    # [Optimize] 将 contents 设为 Optional 并默认为 None，防止 Chatbox 发送 OpenAI 格式时触发 422 报错喵
+    contents: Optional[List[Dict[str, Any]]] = None 
     system_instruction: Optional[Dict[str, Any]] = None
     generationConfig: Optional[Dict[str, Any]] = None
     safetySettings: Optional[List[Dict[str, Any]]] = None
@@ -65,7 +65,6 @@ class SlotManager:
             return {"status": "error", "details": "Config file not found"}
 
         try:
-            # 依然保留 utf-8-sig 以完美兼容 Windows 文件
             with open(CONFIG_PATH, 'r', encoding='utf-8-sig') as f:
                 raw_content = os.path.expandvars(f.read())
                 raw_json = json.loads(raw_content)
