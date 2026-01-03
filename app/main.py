@@ -1,19 +1,18 @@
 import os
 import sys
-import random
+import json
+import time
 import logging
 import secrets
 import asyncio
 import uvicorn
-import aiohttp # [Fix] 替换为 aiohttp，确保 Windows/Mac 本地开发零依赖困难
+import aiohttp
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-# [Fix] 自动修复路径，防止 "ModuleNotFoundError"
-# 无论您是在根目录运行 python -m app.main_local 
-# 还是进入 app 目录运行 python main_local.py，都能找到模块喵！
+# [Fix] 自动修复路径，确保在不同环境下都能找到核心模块
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, Request, HTTPException
@@ -30,44 +29,65 @@ logger = logging.getLogger("Gateway-Local")
 
 # --- 环境配置 ---
 GATEWAY_SECRET = os.getenv("GATEWAY_SECRET", "sk-swarm-local-test-key")
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost") 
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
 REDIS_CLIENT: Optional[AsyncRedis] = None
-# 本地模式下虽然不支持指纹，但保留列表以防配置报错
-IMPERSONATE_LIST = ["chrome110", "chrome111", "safari15_5", "edge101"]
 
 async def smart_frame_processor(session: aiohttp.ClientSession, resp: aiohttp.ClientResponse, slot_idx: int, redis: AsyncRedis) -> AsyncGenerator[str, None]:
     """
-    [aiohttp 版] 流式处理器
+    [同声传译增强版] 将 Gemini 的回复实时翻译为 OpenAI 格式喵！
     """
     try:
-        # aiohttp 的流式读取方式与 curl_cffi 不同
-        async for chunk in resp.content.iter_chunked(1024):
+        async for chunk in resp.content.iter_chunked(2048):
             if not chunk: continue
-            yield chunk.decode('utf-8')
+            raw_data = chunk.decode('utf-8')
+            
+            # 检测并转换 Gemini 原生格式为 OpenAI 格式
+            if "candidates" in raw_data:
+                try:
+                    # 清理 SSE 格式前缀喵
+                    clean_data = raw_data.replace("data: ", "").strip()
+                    if clean_data.startswith("["): clean_data = clean_data[1:]
+                    if clean_data.endswith("]"): clean_data = clean_data[:-1]
+                    
+                    gemini_json = json.loads(clean_data)
+                    content = gemini_json['candidates'][0]['content']['parts'][0]['text']
+                    
+                    # 构造 OpenAI 标准的 chunk 响应
+                    openai_format = {
+                        "id": gemini_json.get("responseId", f"chatcmpl-{int(time.time())}"),
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": "gemini-2.5-flash",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": content},
+                            "finish_reason": gemini_json['candidates'][0].get("finishReason")
+                        }]
+                    }
+                    yield f"data: {json.dumps(openai_format, ensure_ascii=False)}\n\n"
+                except Exception:
+                    yield raw_data
+            else:
+                yield raw_data
+                
+        yield "data: [DONE]\n\n"
+        
     except Exception as e:
-        logger.error(f"❌ [Local] 流式中断: {e}")
-        yield f'\n\n[LOCAL_ERROR] Stream interrupted: {str(e)}\n\n'
+        logger.error(f"❌ [Local] 流式转换失败: {e}")
+        yield f'data: {{"error": {{"message": "{str(e)}"}}}}\n\n'
     finally:
-        # 必须手动关闭 session
         await session.close()
+        # 释放并发锁并报告状态
         await slot_manager.report_status(slot_idx, 200)
         await slot_manager.release_slot(slot_idx, redis)
-        logger.info(f"✅ [Local] Slot {slot_idx} 已安全释放。")
+        logger.info(f"✅ [Local] Slot {slot_idx} 已安全释放并完成转换。")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global REDIS_CLIENT
-    
-    # Windows 环境变量提示
-    if os.name == 'nt':
-        logger.info("💡 [Tip] Windows 用户请注意：config.json 中的 ${VAR} 可能无法被自动替换，建议使用硬编码 Key 或检查系统兼容性。")
-
-    if GATEWAY_SECRET == "sk-swarm-local-test-key":
-        logger.warning("⚠️ [Security] 您正在使用默认测试密钥，请勿在生产环境使用！")
-
     slot_manager.load_config()
     try:
         REDIS_CLIENT = AsyncRedis(
@@ -77,57 +97,73 @@ async def lifespan(app: FastAPI):
             decode_responses=True
         )
         await REDIS_CLIENT.ping()
-        logger.info(f"🐱 本地网关已连接到 Redis ({REDIS_HOST}:{REDIS_PORT}) 喵！")
+        logger.info(f"🐱 翻译网关已就绪！Redis 连接成功。")
     except Exception as e:
-        logger.error(f"❌ Redis 连接失败，请确保本地 Redis 已启动: {e}")
+        logger.error(f"❌ Redis 启动失败，请检查服务: {e}")
     yield
     if REDIS_CLIENT:
         await REDIS_CLIENT.close()
 
 app = FastAPI(title="S.W.A.R.M. Gateway (Local Edition)", lifespan=lifespan)
 
-@app.get("/health")
-async def health_check():
-    if not REDIS_CLIENT:
-        return {"status": "unhealthy", "reason": "redis_disconnected"}
-    return {"status": "healthy"}
-
 @app.post("/v1/chat/completions")
 async def tactical_proxy_local(request: Request, body: ProxyRequest):
+    # 鉴权校验
     auth = request.headers.get("Authorization") or ""
     if not secrets.compare_digest(auth, f"Bearer {GATEWAY_SECRET}"):
-        logger.warning("🚨 [Local] 未授权的访问尝试！")
         raise HTTPException(401, "Unauthorized")
 
     if not REDIS_CLIENT:
-        raise HTTPException(500, "Redis not available in local environment")
+        raise HTTPException(500, "Redis unavailable")
 
+    # 获取原始 JSON 负载用于翻译转换
+    request_json = await request.json()
+    
+    # 分配最优的 API Key 槽位
     slot_idx = await slot_manager.get_best_slot(REDIS_CLIENT)
     slot = slot_manager.slots[slot_idx]
     
     target_model = body.model or "gemini-2.5-flash"
-    target_url = f"{BASE_URL}/{target_model}:generateContent"
+    target_url = f"{BASE_URL(target_model)}" # 调用 core 中的函数
     
-    # 本地引擎忽略 impersonate 设置
-    target_impersonate = slot.get("impersonate", "default")
-    target_proxy = slot.get("proxy")
+    # --- 核心优化：OpenAI 格式转 Gemini 格式 (深度清洗版) ---
+    gemini_body = body.model_dump(exclude_none=True)
     
-    # [aiohttp] 创建会话
-    # 注意：aiohttp 不支持 impersonate 参数，这是本地版的妥协
-    timeout = aiohttp.ClientTimeout(total=120)
-    session = aiohttp.ClientSession(timeout=timeout)
+    if "messages" in request_json and (not gemini_body.get("contents")):
+        logger.info("🔄 正在为主人进行多轮对话协议转换...喵！")
+        raw_msgs = []
+        for m in request_json["messages"]:
+            # 角色转换：system/user -> user, assistant -> model
+            role = "user" if m["role"] in ["user", "system"] else "model"
+            raw_msgs.append({"role": role, "text": m.get("content") or ""})
+        
+        # 合并 Gemini 不允许的连续同角色消息
+        final_contents = []
+        for item in raw_msgs:
+            if final_contents and item["role"] == final_contents[-1]["role"]:
+                final_contents[-1]["parts"][0]["text"] += f"\n\n{item['text']}"
+            else:
+                final_contents.append({
+                    "role": item["role"],
+                    "parts": [{"text": item["text"]}]
+                })
+        gemini_body["contents"] = final_contents
+    # -------------------------------------------------------
+
+    session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120))
     
     try:
-        logger.info(f"📡 [Local/aiohttp] [{target_model}] Slot {slot_idx} | 代理: {target_proxy or '直连'} | (指纹模拟已禁用)")
-        
-        # 执行请求
+        # 使用 & 拼接 API Key
+        final_url = f"{target_url}&key={slot['key']}"
+        logger.info(f"📡 [Local] 使用 Slot {slot_idx} | 代理: {slot.get('proxy') or '直连'}")
+
         resp = await session.post(
-            f"{target_url}?key={slot['key']}", 
-            json=body.model_dump(exclude_none=True),
-            proxy=target_proxy # aiohttp 直接支持 proxy 参数
+            final_url, 
+            json=gemini_body,
+            proxy=slot.get("proxy")
         )
 
-        if resp.status != 200: # aiohttp 使用 .status 而不是 .status_code
+        if resp.status != 200:
             err_text = await resp.text()
             await session.close()
             await slot_manager.report_status(slot_idx, resp.status)
@@ -140,14 +176,12 @@ async def tactical_proxy_local(request: Request, body: ProxyRequest):
         )
 
     except Exception as e:
-        # 确保异常时关闭 session
         if not session.closed:
             await session.close()
         await slot_manager.release_slot(slot_idx, REDIS_CLIENT)
         if isinstance(e, HTTPException): raise e
-        raise HTTPException(502, detail=f"Local Gateway Error: {str(e)}")
+        raise HTTPException(502, detail=str(e))
 
 if __name__ == "__main__":
-    # [Fix] 开启 reload=True 热重载，并使用 import string 启动
-    # 这样您修改代码后，服务会自动重启，不用手动关了再开喵！
-    uvicorn.run("app.main_local:app", host="0.0.0.0", port=8001, reload=True)
+    # 启动本地服务
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8001, reload=True)
